@@ -1,3 +1,4 @@
+// Based/Inspired by Jeff Erickson, "The Art of Hacking"
 extern crate docopt;
 #[macro_use]
 extern crate serde_derive;
@@ -56,6 +57,7 @@ fn decompose_shift(value: u32, shift: u8) -> u8 {
     ((value & (0xFF << shift)) >> shift) as u8
 }
 
+// Don't llok, it's ugly.
 fn main() {
     let args: Args = Docopt::new(USAGE)
         .and_then(|d| d.deserialize())
