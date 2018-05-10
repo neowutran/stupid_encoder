@@ -1,4 +1,4 @@
-// Based/Inspired by Jeff Erickson, "The Art of Hacking"
+// Based/Inspired by Jeff Erickson, "The Art of Exploitation"
 extern crate docopt;
 #[macro_use]
 extern crate serde_derive;
