@@ -2,9 +2,7 @@
 extern crate docopt;
 #[macro_use]
 extern crate serde_derive;
-extern crate rand;
 use docopt::Docopt;
-use rand::{thread_rng, Rng};
 use std::{str, collections::HashMap};
 const USAGE: &'static str = "
 Stupid encoder, 32bits. Use EAX register, push the result to STACK.
@@ -76,11 +74,10 @@ fn main() {
     let args: Args = Docopt::new(USAGE)
         .and_then(|d| d.deserialize())
         .unwrap_or_else(|e| e.exit());
-    let mut good_bytes = parse_bytes(&args.flag_bytes);
+    let good_bytes = parse_bytes(&args.flag_bytes);
     if !can_encode(&good_bytes) {
         panic!("Can't encode");
     }
-    thread_rng().shuffle(&mut good_bytes);
     let payload = parse_bytes(&args.arg_payload);
     let mut previous = compose(parse_bytes(&args.flag_start_value));
     println!("encoded_egghunter=(");
