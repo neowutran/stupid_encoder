@@ -22,262 +22,167 @@ const ADD_EAX: u8 = 0x05;
 const SUB_EAX: u8 = 0x2D;
 #[derive(Deserialize)]
 struct Args {
-    arg_payload: String,
-    flag_bytes: String,
-    flag_start_value: String,
+  arg_payload: String,
+  flag_bytes: String,
+  flag_start_value: String,
 }
 fn can_encode(good_bytes: &Vec<u8>) -> bool {
-    if !good_bytes.contains(&PUSH_EAX)
-        || (!good_bytes.contains(&SUB_EAX) && !good_bytes.contains(&ADD_EAX))
-    {
-        return false;
-    }
-    true
+  good_bytes.contains(&PUSH_EAX) && (good_bytes.contains(&SUB_EAX) || good_bytes.contains(&ADD_EAX))
 }
 
 fn parse_bytes(arg: &str) -> Vec<u8> {
-    let mut result = Vec::new();
-    for byte in arg.split("\\x") {
-        if byte.is_empty() {
-            continue;
-        }
-        result.push(u8::from_str_radix(&byte, 16).expect(&format!(
-            "Not an hexadecimal string: {}. Expect something like 'FF'",
-            &byte
-        )));
+  let mut result = Vec::new();
+  for byte in arg.split("\\x") {
+    if byte.is_empty() {
+      continue;
     }
-    result
+    result.push(u8::from_str_radix(&byte, 16).expect(&format!(
+          "Not an hexadecimal string: {}. Expect something like 'FF'",
+          &byte
+          )));
+  }
+  result
 }
 
 fn decompose(value: u32) -> Vec<u8> {
-    let mut result = Vec::new();
-    for i in 0..4 {
-        result.push(decompose_shift(value, i * 8))
-    }
-    result
+  let mut result = Vec::new();
+  for i in 0..4 {
+    result.push(decompose_shift(value, i * 8))
+  }
+  result
 }
 
 fn decompose_shift(value: u32, shift: u8) -> u8 {
-    ((value & (0xFF << shift)) >> shift) as u8
+  ((value & (0xFF << shift)) >> shift) as u8
 }
 
 fn compose(value: Vec<u8>) -> u32 {
-    let mut result = 0;
-    for i in 0..4 {
-        result += (value[i] as u32) << i * 8;
-    }
-    result
+  let mut result = 0;
+  for i in 0..4 {
+    result += (value[i] as u32) << i * 8;
+  }
+  result
 }
 
-// Don't look, it's ugly.
 fn main() {
-    let args: Args = Docopt::new(USAGE)
-        .and_then(|d| d.deserialize())
-        .unwrap_or_else(|e| e.exit());
-    let good_bytes = parse_bytes(&args.flag_bytes);
-    if !can_encode(&good_bytes) {
-        panic!("Can't encode");
-    }
-    let payload = parse_bytes(&args.arg_payload);
-    let mut previous = compose(parse_bytes(&args.flag_start_value));
-    println!("encoded_egghunter=(");
-    for chunk in payload.chunks(4).rev() {
-        let wanted = compose(chunk.to_vec());
-        generate(previous, wanted, &good_bytes);
-        previous = wanted;
-    }
-    println!(")");
+  let args: Args = Docopt::new(USAGE)
+    .and_then(|d| d.deserialize())
+    .unwrap_or_else(|e| e.exit());
+  let good_bytes = parse_bytes(&args.flag_bytes);
+  if !can_encode(&good_bytes) {
+    panic!("Can't encode");
+  }
+  let payload = parse_bytes(&args.arg_payload);
+  let mut previous = compose(parse_bytes(&args.flag_start_value));
+  println!("encoded_egghunter=(");
+  for chunk in payload.chunks(4).rev() {
+    let wanted = compose(chunk.to_vec());
+    generate(previous, wanted, &good_bytes);
+    previous = wanted;
+  }
+  println!(")");
 }
 
-fn generate_instruction_byte(
-    bytes: Vec<Option<u8>>,
-    carry: u8,
-    byte_number: usize,
-    word: &mut HashMap<usize, HashMap<usize, u8>>,
-    target_byte: u8,
-    initial_byte: u8,
-    is_sub: bool,
-) -> Option<u8> {
-    let shot;
-    let single_compare;
-    if is_sub {
-        shot = target_byte as u32 + carry as u32
-            + bytes
-                .iter()
-                .fold(0u32, |total, next| total + next.unwrap_or(0) as u32);
-        single_compare = initial_byte;
-    } else {
-        shot = initial_byte as u32 + carry as u32
-            + bytes
-                .iter()
-                .fold(0u32, |total, next| total + next.unwrap_or(0) as u32);
-        single_compare = target_byte;
-    }
-    let single = (shot & 0xff) as u8;
-    if single == single_compare {
+fn generate_instruction_byte(instruction_count: u8, deep: u8, good_bytes: &Vec<u8>, word: &mut HashMap<usize, HashMap<usize, u8>>, target_bytes: &Vec<u8>, initial_bytes: &Vec<u8>, carry: u8, byte_number:usize, is_sub: bool, bytes: &mut Vec<Option<u8>>) -> Option<u8>{
+  for good_byte in good_bytes{
+    bytes[deep as usize] = Some(*good_byte);
+    if instruction_count-deep > 1{
+      let result = generate_instruction_byte(instruction_count, deep+1, good_bytes, word, target_bytes, initial_bytes, carry, byte_number, is_sub, bytes);
+      if result.is_some(){
+        return result;
+      }
+    }else{
+      let mut shot = carry as u32 + bytes
+        .iter()
+        .fold(0u32, |total, next| total + next.unwrap_or(0) as u32);
+      let single_compare;
+      if is_sub {
+        shot += target_bytes[byte_number] as u32;
+        single_compare = initial_bytes[byte_number];
+      } else {
+        shot += initial_bytes[byte_number] as u32;
+        single_compare = target_bytes[byte_number];
+      }
+      if (shot & 0xff) as u8 == single_compare {
         let carry = ((shot & (0xff << 8)) >> 8) as u8;
         for byte_count in 0..4 {
-            match bytes[byte_count] {
-                Some(byte) => {
-                    word.entry(byte_count)
-                        .or_insert(HashMap::new())
-                        .insert(byte_number, byte);
-                }
-                None => {}
-            }
-        }
-        return Some(carry);
-    }
-    None
-}
-
-fn generate_instruction_byte_number(
-    instruction_count: u8,
-    good_bytes: &Vec<u8>,
-    word: &mut HashMap<usize, HashMap<usize, u8>>,
-    target_bytes: &Vec<u8>,
-    initial_bytes: &Vec<u8>,
-    carry: u8,
-    byte_number: usize,
-) -> Option<u8> {
-    let is_sub = good_bytes.contains(&SUB_EAX);
-    for good_byte1 in good_bytes {
-        if instruction_count > 1 {
-            for good_byte2 in good_bytes {
-                if instruction_count > 2 {
-                    for good_byte3 in good_bytes {
-                        if instruction_count > 3 {
-                            for good_byte4 in good_bytes {
-                                let carry_result = generate_instruction_byte(
-                                    vec![
-                                        Some(*good_byte1),
-                                        Some(*good_byte2),
-                                        Some(*good_byte3),
-                                        Some(*good_byte4),
-                                    ],
-                                    carry,
-                                    byte_number,
-                                    word,
-                                    target_bytes[byte_number],
-                                    initial_bytes[byte_number],
-                                    is_sub,
-                                );
-                                if carry_result.is_some() {
-                                    return carry_result;
-                                }
-                            }
-                        } else {
-                            let carry_result = generate_instruction_byte(
-                                vec![
-                                    Some(*good_byte1),
-                                    Some(*good_byte2),
-                                    Some(*good_byte3),
-                                    None,
-                                ],
-                                carry,
-                                byte_number,
-                                word,
-                                target_bytes[byte_number],
-                                initial_bytes[byte_number],
-                                is_sub,
-                            );
-                            if carry_result.is_some() {
-                                return carry_result;
-                            }
-                        }
-                    }
-                } else {
-                    let carry_result = generate_instruction_byte(
-                        vec![Some(*good_byte1), Some(*good_byte2), None, None],
-                        carry,
-                        byte_number,
-                        word,
-                        target_bytes[byte_number],
-                        initial_bytes[byte_number],
-                        is_sub,
-                    );
-                    if carry_result.is_some() {
-                        return carry_result;
-                    }
-                }
-            }
-        } else {
-            let carry_result = generate_instruction_byte(
-                vec![Some(*good_byte1), None, None, None],
-                carry,
-                byte_number,
-                word,
-                target_bytes[byte_number],
-                initial_bytes[byte_number],
-                is_sub,
-            );
-            if carry_result.is_some() {
-                return carry_result;
-            }
-        }
-    }
-    None
-}
-
-fn generate_instruction(
-    instruction_count: u8,
-    good_bytes: &Vec<u8>,
-    word: &mut HashMap<usize, HashMap<usize, u8>>,
-    target_bytes: &Vec<u8>,
-    initial_bytes: &Vec<u8>,
-) -> bool {
-    let mut carry: u8 = 0;
-    let mut flag: u8 = 0;
-    for byte_number in 0..4 {
-        match generate_instruction_byte_number(
-            instruction_count,
-            good_bytes,
-            word,
-            target_bytes,
-            initial_bytes,
-            carry,
-            byte_number,
-        ) {
-            Some(c) => {
-                carry = c;
-                flag += 1;
+          match bytes[byte_count] {
+            Some(byte) => {
+              word.entry(byte_count)
+                .or_insert(HashMap::new())
+                .insert(byte_number, byte);
             }
             None => {}
-        };
+          }
+        }
+        return Some(carry);
+      }
     }
-    return flag == 4;
+  }
+  None
+}
+fn generate_instruction(
+  instruction_count: u8,
+  good_bytes: &Vec<u8>,
+  word: &mut HashMap<usize, HashMap<usize, u8>>,
+  target_bytes: &Vec<u8>,
+  initial_bytes: &Vec<u8>,
+  ) -> bool {
+  let mut carry: u8 = 0;
+  let mut flag: u8 = 0;
+  let is_sub = good_bytes.contains(&SUB_EAX);
+  for byte_number in 0..4 {
+    match generate_instruction_byte(
+      instruction_count,
+      0,
+      good_bytes,
+      word,
+      target_bytes,
+      initial_bytes,
+      carry,
+      byte_number,
+      is_sub,
+      &mut vec![None, None, None, None]
+      ) {
+      Some(c) => {
+        carry = c;
+        flag += 1;
+      }
+      None => {}
+    };
+  }
+  return flag == 4;
 }
 
 fn generate(initial: u32, target: u32, good_bytes: &Vec<u8>) {
-    let target_bytes = decompose(target);
-    let initial_bytes = decompose(initial);
-    let mut word: HashMap<usize, HashMap<usize, u8>> = HashMap::new();
-    for instruction_count in 1..5 {
-        if generate_instruction(
-            instruction_count,
-            &good_bytes,
-            &mut word,
-            &target_bytes,
-            &initial_bytes,
-        ) {
-            for instruction_index in 0..5 {
-                if !word.get(&instruction_index).is_some() {
-                    break;
-                }
-                if !good_bytes.contains(&SUB_EAX) {
-                    print!("\"\\x{:01$x}", ADD_EAX, 2);
-                } else {
-                    print!("\"\\x{:01$x}", SUB_EAX, 2);
-                }
-                print!("\\x{:01$x}", word[&instruction_index][&0], 2);
-                print!("\\x{:01$x}", word[&instruction_index][&1], 2);
-                print!("\\x{:01$x}", word[&instruction_index][&2], 2);
-                print!("\\x{:01$x}", word[&instruction_index][&3], 2);
-                println!("\"");
-            }
-            println!("\"\\x{:01$x}\"", PUSH_EAX, 2);
-            return;
+  let target_bytes = decompose(target);
+  let initial_bytes = decompose(initial);
+  let mut word: HashMap<usize, HashMap<usize, u8>> = HashMap::new();
+  for instruction_count in 1..5 {
+    if generate_instruction(
+      instruction_count,
+      &good_bytes,
+      &mut word,
+      &target_bytes,
+      &initial_bytes,
+      ) {
+      for instruction_index in 0..5 {
+        if !word.get(&instruction_index).is_some() {
+          break;
         }
+        if !good_bytes.contains(&SUB_EAX) {
+          print!("\"\\x{:01$x}", ADD_EAX, 2);
+        } else {
+          print!("\"\\x{:01$x}", SUB_EAX, 2);
+        }
+        for index in 0..4{
+          print!("\\x{:01$x}", word[&instruction_index][&index], 2);
+        }
+        println!("\"");
+      }
+      println!("\"\\x{:01$x}\"", PUSH_EAX, 2);
+      return;
     }
-    panic!("Failed to encode");
+  }
+  panic!("Failed to encode");
 }
