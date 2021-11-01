@@ -1,188 +1,212 @@
 // Based/Inspired by Jeff Erickson, "The Art of Exploitation"
-extern crate docopt;
-#[macro_use]
-extern crate serde_derive;
-use docopt::Docopt;
-use std::{str, collections::HashMap};
-const USAGE: &'static str = "
-Stupid encoder, 32bits. Use EAX register, push the result to STACK.
-Assumed: EAX = 0
+use clap::Parser;
+use std::{collections::HashMap, str};
 
-Usage:
-  stupid_encoder <payload> [--bytes <bytes>] [--start-value <start_value>]
-  stupid_encoder (-h | --help)
+#[derive(Parser)]
+#[clap(version = clap::crate_version!(), author = clap::crate_authors!())]
+struct Opts {
+    /// Sets a custom config file. Could have been an Option<T> with no default too
+    #[clap(short, long, default_value = "\\x00\\x00\\x00\\x00")]
+    start_value: String,
 
-Options:
-  --bytes <bytes>, -b <bytes>                           Allowed bytes [default: \\x01\\x02\\x03\\x04\\x05\\x06\\x07\\x08\\x09\\x0b\\x0c\\x0e\\x0f\\x10\\x11\\x12\\x13\\x14\\x15\\x16\\x17\\x18\\x19\\x1a\\x1b\\x1c\\x1d\\x1e\\x1f\\x20\\x21\\x22\\x23\\x24\\x25\\x26\\x27\\x28\\x29\\x2a\\x2b\\x2c\\x2d\\x2e\\x30\\x31\\x32\\x33\\x34\\x35\\x36\\x37\\x38\\x39\\x3b\\x3c\\x3d\\x3e\\x41\\x42\\x43\\x44\\x45\\x46\\x47\\x48\\x49\\x4a\\x4b\\x4c\\x4d\\x4e\\x4f\\x50\\x51\\x52\\x53\\x54\\x55\\x56\\x57\\x58\\x59\\x5a\\x5b\\x5c\\x5d\\x5e\\x5f\\x60\\x61\\x62\\x63\\x64\\x65\\x66\\x67\\x68\\x69\\x6a\\x6b\\x6c\\x6d\\x6e\\x6f\\x70\\x71\\x72\\x73\\x74\\x75\\x76\\x77\\x78\\x79\\x7a\\x7b\\x7c\\x7d\\x7e\\x7f]
-  --start-value <start_value>, -s <start_value>         Start value [default: \\x00\\x00\\x00\\x00]
-  -h --help                                             Show this screen.
-";
+    #[clap(short, long, conflicts_with = "good_bytes")]
+    bad_bytes: Option<String>,
+
+    #[clap(short, long, conflicts_with = "bad_bytes")]
+    good_bytes: Option<String>,
+
+    payload: String,
+}
+
 const PUSH_EAX: u8 = 0x50;
 const ADD_EAX: u8 = 0x05;
 const SUB_EAX: u8 = 0x2D;
-#[derive(Deserialize)]
-struct Args {
-  arg_payload: String,
-  flag_bytes: String,
-  flag_start_value: String,
-}
-fn can_encode(good_bytes: &Vec<u8>) -> bool {
-  good_bytes.contains(&PUSH_EAX) && (good_bytes.contains(&SUB_EAX) || good_bytes.contains(&ADD_EAX))
+
+fn can_encode(good_bytes: &[u8]) -> bool {
+    good_bytes.contains(&PUSH_EAX)
+        && (good_bytes.contains(&SUB_EAX) || good_bytes.contains(&ADD_EAX))
 }
 
 fn parse_bytes(arg: &str) -> Vec<u8> {
-  let mut result = Vec::new();
-  for byte in arg.split("\\x") {
-    if byte.is_empty() {
-      continue;
+    let mut result = Vec::new();
+    for byte in arg.split("\\x") {
+        if byte.is_empty() {
+            continue;
+        }
+        result.push(u8::from_str_radix(byte, 16).unwrap_or_else(|_| {
+            panic!(
+                "Not an hexadecimal string: {}. Expect something like 'FF'",
+                &byte
+            )
+        }));
     }
-    result.push(u8::from_str_radix(&byte, 16).expect(&format!(
-          "Not an hexadecimal string: {}. Expect something like 'FF'",
-          &byte
-          )));
-  }
-  result
+    result
 }
 
 fn decompose(value: u32) -> Vec<u8> {
-  let mut result = Vec::new();
-  for i in 0..4 {
-    result.push(decompose_shift(value, i * 8))
-  }
-  result
+    let mut result = Vec::new();
+    for i in 0..4 {
+        result.push(decompose_shift(value, i * 8))
+    }
+    result
 }
 
-fn decompose_shift(value: u32, shift: u8) -> u8 {
-  ((value & (0xFF << shift)) >> shift) as u8
+const fn decompose_shift(value: u32, shift: u8) -> u8 {
+    ((value & (0xFF << shift)) >> shift) as u8
 }
 
-fn compose(value: Vec<u8>) -> u32 {
-  let mut result = 0;
-  for i in 0..4 {
-    result += (value[i] as u32) << i * 8;
-  }
-  result
+fn compose(value: &[u8]) -> u32 {
+    let mut result = 0;
+    for (i, v) in value.iter().enumerate().take(4) {
+        result += u32::from(*v) << (i * 8);
+    }
+    result
 }
 
 fn main() {
-  let args: Args = Docopt::new(USAGE)
-    .and_then(|d| d.deserialize())
-    .unwrap_or_else(|e| e.exit());
-  let good_bytes = parse_bytes(&args.flag_bytes);
-  if !can_encode(&good_bytes) {
-    panic!("Can't encode");
-  }
-  let payload = parse_bytes(&args.arg_payload);
-  let mut previous = compose(parse_bytes(&args.flag_start_value));
-  println!("encoded_egghunter=(");
-  for chunk in payload.chunks(4).rev() {
-    let wanted = compose(chunk.to_vec());
-    generate(previous, wanted, &good_bytes);
-    previous = wanted;
-  }
-  println!(")");
+    let opts: Opts = Opts::parse();
+    let mut good_bytes = Vec::new();
+    if let Some(good_bytes_raw) = opts.good_bytes {
+        good_bytes = parse_bytes(&good_bytes_raw);
+    }
+    if let Some(bad_bytes_raw) = opts.bad_bytes {
+        let bad_bytes = parse_bytes(&bad_bytes_raw);
+        for i in u8::min_value()..=u8::max_value() {
+            if !bad_bytes.contains(&i) {
+                good_bytes.push(i);
+            }
+        }
+    }
+    if !can_encode(&good_bytes) {
+        panic!("Can't encode");
+    }
+    let payload = parse_bytes(&opts.payload);
+    let mut previous = compose(&parse_bytes(&opts.start_value));
+    println!("encoded_egghunter=(");
+    for chunk in payload.chunks(4).rev() {
+        let wanted = compose(chunk);
+        generate(previous, wanted, &good_bytes);
+        previous = wanted;
+    }
+    println!(")");
 }
 
-fn generate_instruction_byte(instruction_count: u8, deep: u8, good_bytes: &Vec<u8>, word: &mut HashMap<usize, HashMap<usize, u8>>, target_bytes: &Vec<u8>, initial_bytes: &Vec<u8>, carry: u8, byte_number:usize, is_sub: bool, bytes: &mut Vec<Option<u8>>) -> Option<u8>{
-  for good_byte in good_bytes{
-    bytes[deep as usize] = Some(*good_byte);
-    if instruction_count-deep > 1{
-      let result = generate_instruction_byte(instruction_count, deep+1, good_bytes, word, target_bytes, initial_bytes, carry, byte_number, is_sub, bytes);
-      if result.is_some(){
-        return result;
-      }
-    }else{
-      let mut shot = carry as u32 + bytes
-        .iter()
-        .fold(0u32, |total, next| total + next.unwrap_or(0) as u32);
-      let single_compare;
-      if is_sub {
-        shot += target_bytes[byte_number] as u32;
-        single_compare = initial_bytes[byte_number];
-      } else {
-        shot += initial_bytes[byte_number] as u32;
-        single_compare = target_bytes[byte_number];
-      }
-      if (shot & 0xff) as u8 == single_compare {
-        let carry = ((shot & (0xff << 8)) >> 8) as u8;
-        for byte_count in 0..4 {
-          match bytes[byte_count] {
-            Some(byte) => {
-              word.entry(byte_count)
-                .or_insert(HashMap::new())
-                .insert(byte_number, byte);
+fn generate_instruction_byte(
+    instruction_count: u8,
+    deep: u8,
+    good_bytes: &[u8],
+    word: &mut HashMap<usize, HashMap<usize, u8>>,
+    target_bytes: &[u8],
+    initial_bytes: &[u8],
+    carry: u8,
+    byte_number: usize,
+    is_sub: bool,
+    bytes: &mut Vec<Option<u8>>,
+) -> Option<u8> {
+    for good_byte in good_bytes {
+        bytes[deep as usize] = Some(*good_byte);
+        if instruction_count - deep > 1 {
+            let result = generate_instruction_byte(
+                instruction_count,
+                deep + 1,
+                good_bytes,
+                word,
+                target_bytes,
+                initial_bytes,
+                carry,
+                byte_number,
+                is_sub,
+                bytes,
+            );
+            if result.is_some() {
+                return result;
             }
-            None => {}
-          }
+        } else {
+            let mut shot = u32::from(carry)
+                + bytes
+                    .iter()
+                    .fold(0_u32, |total, next| total + u32::from(next.unwrap_or(0)));
+            let single_compare = if is_sub {
+                shot += u32::from(target_bytes[byte_number]);
+                initial_bytes[byte_number]
+            } else {
+                shot += u32::from(initial_bytes[byte_number]);
+                target_bytes[byte_number]
+            };
+            if (shot & 0xff) as u8 == single_compare {
+                let carry = ((shot & (0xff << 8)) >> 8) as u8;
+                for (byte_count, maybe_byte) in bytes.iter().enumerate().take(4) {
+                    if let Some(byte) = maybe_byte {
+                        word.entry(byte_count)
+                            .or_insert_with(HashMap::new)
+                            .insert(byte_number, *byte);
+                    }
+                }
+                return Some(carry);
+            }
         }
-        return Some(carry);
-      }
     }
-  }
-  None
+    None
 }
 fn generate_instruction(
-  instruction_count: u8,
-  good_bytes: &Vec<u8>,
-  word: &mut HashMap<usize, HashMap<usize, u8>>,
-  target_bytes: &Vec<u8>,
-  initial_bytes: &Vec<u8>,
-  ) -> bool {
-  let mut carry: u8 = 0;
-  let mut flag: u8 = 0;
-  let is_sub = good_bytes.contains(&SUB_EAX);
-  for byte_number in 0..4 {
-    match generate_instruction_byte(
-      instruction_count,
-      0,
-      good_bytes,
-      word,
-      target_bytes,
-      initial_bytes,
-      carry,
-      byte_number,
-      is_sub,
-      &mut vec![None, None, None, None]
-      ) {
-      Some(c) => {
-        carry = c;
-        flag += 1;
-      }
-      None => {}
-    };
-  }
-  return flag == 4;
+    instruction_count: u8,
+    good_bytes: &[u8],
+    word: &mut HashMap<usize, HashMap<usize, u8>>,
+    target_bytes: &[u8],
+    initial_bytes: &[u8],
+) -> bool {
+    let mut carry: u8 = 0;
+    let mut flag: u8 = 0;
+    let is_sub = good_bytes.contains(&SUB_EAX);
+    for byte_number in 0..4 {
+        if let Some(c) = generate_instruction_byte(
+            instruction_count,
+            0,
+            good_bytes,
+            word,
+            target_bytes,
+            initial_bytes,
+            carry,
+            byte_number,
+            is_sub,
+            &mut vec![None, None, None, None],
+        ) {
+            carry = c;
+            flag += 1;
+        };
+    }
+    flag == 4
 }
 
-fn generate(initial: u32, target: u32, good_bytes: &Vec<u8>) {
-  let target_bytes = decompose(target);
-  let initial_bytes = decompose(initial);
-  let mut word: HashMap<usize, HashMap<usize, u8>> = HashMap::new();
-  for instruction_count in 1..5 {
-    if generate_instruction(
-      instruction_count,
-      &good_bytes,
-      &mut word,
-      &target_bytes,
-      &initial_bytes,
-      ) {
-      for instruction_index in 0..5 {
-        if !word.get(&instruction_index).is_some() {
-          break;
+fn generate(initial: u32, target: u32, good_bytes: &[u8]) {
+    let target_bytes = decompose(target);
+    let initial_bytes = decompose(initial);
+    let mut word: HashMap<usize, HashMap<usize, u8>> = HashMap::new();
+    for instruction_count in 1..5 {
+        if generate_instruction(
+            instruction_count,
+            good_bytes,
+            &mut word,
+            &target_bytes,
+            &initial_bytes,
+        ) {
+            for instruction_index in 0..5 {
+                if word.get(&instruction_index).is_none() {
+                    break;
+                }
+                if good_bytes.contains(&SUB_EAX) {
+                    print!("\"\\x{:01$x}", SUB_EAX, 2);
+                } else {
+                    print!("\"\\x{:01$x}", ADD_EAX, 2);
+                }
+                for index in 0..4 {
+                    print!("\\x{:01$x}", word[&instruction_index][&index], 2);
+                }
+                println!("\"");
+            }
+            println!("\"\\x{:01$x}\"", PUSH_EAX, 2);
+            return;
         }
-        if !good_bytes.contains(&SUB_EAX) {
-          print!("\"\\x{:01$x}", ADD_EAX, 2);
-        } else {
-          print!("\"\\x{:01$x}", SUB_EAX, 2);
-        }
-        for index in 0..4{
-          print!("\\x{:01$x}", word[&instruction_index][&index], 2);
-        }
-        println!("\"");
-      }
-      println!("\"\\x{:01$x}\"", PUSH_EAX, 2);
-      return;
     }
-  }
-  panic!("Failed to encode");
+    panic!("Failed to encode");
 }
