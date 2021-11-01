@@ -5,7 +5,6 @@ use std::{collections::HashMap, str};
 #[derive(Parser)]
 #[clap(version = clap::crate_version!(), author = clap::crate_authors!())]
 struct Opts {
-    /// Sets a custom config file. Could have been an Option<T> with no default too
     #[clap(short, long, default_value = "\\x00\\x00\\x00\\x00")]
     start_value: String,
 
@@ -82,7 +81,7 @@ fn main() {
     }
     let payload = parse_bytes(&opts.payload);
     let mut previous = compose(&parse_bytes(&opts.start_value));
-    println!("encoded_egghunter=(");
+    println!("payload=(");
     for chunk in payload.chunks(4).rev() {
         let wanted = compose(chunk);
         generate(previous, wanted, &good_bytes);
@@ -195,16 +194,16 @@ fn generate(initial: u32, target: u32, good_bytes: &[u8]) {
                     break;
                 }
                 if good_bytes.contains(&SUB_EAX) {
-                    print!("\"\\x{:01$x}", SUB_EAX, 2);
+                    print!("b\"\\x{:01$x}", SUB_EAX, 2);
                 } else {
-                    print!("\"\\x{:01$x}", ADD_EAX, 2);
+                    print!("b\"\\x{:01$x}", ADD_EAX, 2);
                 }
                 for index in 0..4 {
                     print!("\\x{:01$x}", word[&instruction_index][&index], 2);
                 }
                 println!("\"");
             }
-            println!("\"\\x{:01$x}\"", PUSH_EAX, 2);
+            println!("b\"\\x{:01$x}\"", PUSH_EAX, 2);
             return;
         }
     }
